@@ -77,7 +77,7 @@ export interface WizardState {
 }
 
 export const INITIAL_STATE: WizardState = {
-  mode:                'manual',
+  mode:                '',
   step:                0,
   targetType:          '',
   targetValue:         '',
