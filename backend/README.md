@@ -26,15 +26,16 @@ The existing Vite config proxies `/api` to `http://localhost:8000`.
 ## Optional LLM Setup
 
 The natural-language parser works without an external API by using a deterministic
-heuristic parser. To use OpenAI instead, put these values in `.env`:
+heuristic parser. To use Gemini instead, create a Gemini API key in Google AI
+Studio and put these values in `.env`:
 
 ```bash
-LLM_PROVIDER=openai
-OPENAI_API_KEY=sk-...
-OPENAI_MODEL=gpt-4.1-mini
+LLM_PROVIDER=gemini
+GEMINI_API_KEY=...
+GEMINI_MODEL=gemini-2.5-flash
 ```
 
-When `LLM_PROVIDER=auto`, the backend uses OpenAI only if `OPENAI_API_KEY` is set.
+When `LLM_PROVIDER=auto`, the backend uses Gemini only if `GEMINI_API_KEY` is set.
 If the call fails, it falls back to the heuristic parser and returns a warning.
 
 ## Frontend Call Shapes

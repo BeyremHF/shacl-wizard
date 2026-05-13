@@ -16,23 +16,28 @@ def _split_csv(value: str) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
+def _llm_provider(value: str) -> str:
+    provider = value.strip().lower()
+    return provider if provider in {"auto", "gemini", "heuristic"} else "auto"
+
+
 @dataclass(frozen=True)
 class Settings:
     app_name: str
     base_uri: str
     cors_origins: list[str]
     llm_provider: str
-    openai_api_key: str | None
-    openai_model: str
+    gemini_api_key: str | None
+    gemini_model: str
 
     @property
-    def should_try_openai(self) -> bool:
+    def should_try_gemini(self) -> bool:
         provider = self.llm_provider.lower()
-        return provider in {"auto", "openai"} and bool(self.openai_api_key)
+        return provider in {"auto", "gemini"} and bool(self.gemini_api_key)
 
     @property
-    def requires_openai(self) -> bool:
-        return self.llm_provider.lower() == "openai"
+    def requires_gemini(self) -> bool:
+        return self.llm_provider.lower() == "gemini"
 
 
 def get_settings() -> Settings:
@@ -45,7 +50,7 @@ def get_settings() -> Settings:
                 "http://localhost:5173,http://127.0.0.1:5173",
             )
         ),
-        llm_provider=os.getenv("LLM_PROVIDER", "auto"),
-        openai_api_key=os.getenv("OPENAI_API_KEY"),
-        openai_model=os.getenv("OPENAI_MODEL", "gpt-4.1-mini"),
+        llm_provider=_llm_provider(os.getenv("LLM_PROVIDER", "auto")),
+        gemini_api_key=os.getenv("GEMINI_API_KEY"),
+        gemini_model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
     )

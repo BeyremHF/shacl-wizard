@@ -15,18 +15,15 @@ from app.models import (
 
 LLM_SCHEMA: dict[str, Any] = {
     "type": "object",
-    "additionalProperties": False,
     "properties": {
         "properties": {
             "type": "array",
             "items": {
                 "type": "object",
-                "additionalProperties": False,
                 "properties": {
                     "path": {"type": "string"},
                     "constraints": {
                         "type": "object",
-                        "additionalProperties": False,
                         "properties": {
                             "minCount": {"type": "string"},
                             "maxCount": {"type": "string"},
@@ -70,40 +67,35 @@ xsd:date, xsd:boolean, xsd:anyURI, sh:IRI, sh:Literal, and sh:BlankNode.
 
 
 def parse_natural_language(request: ParseNLRequest, settings: Settings) -> ParseNLResponse:
-    if settings.requires_openai and not settings.openai_api_key:
+    if settings.requires_gemini and not settings.gemini_api_key:
         heuristic = parse_with_heuristics(request)
-        heuristic.warnings.append("LLM_PROVIDER=openai is set, but OPENAI_API_KEY is missing.")
+        heuristic.warnings.append("LLM_PROVIDER=gemini is set, but GEMINI_API_KEY is missing.")
         return heuristic
 
-    if not settings.should_try_openai:
+    if not settings.should_try_gemini:
         return parse_with_heuristics(request)
 
     try:
-        return parse_with_openai(request, settings)
+        return parse_with_gemini(request, settings)
     except Exception as exc:  # pragma: no cover - depends on external provider
         heuristic = parse_with_heuristics(request)
-        heuristic.warnings.append(f"OpenAI parser failed; heuristic parser used instead: {exc}")
+        heuristic.warnings.append(f"Gemini parser failed; heuristic parser used instead: {exc}")
         return heuristic
 
 
-def parse_with_openai(request: ParseNLRequest, settings: Settings) -> ParseNLResponse:
+def parse_with_gemini(request: ParseNLRequest, settings: Settings) -> ParseNLResponse:
     try:
-        from openai import OpenAI
+        from google import genai
     except ImportError as exc:  # pragma: no cover - optional dependency
-        raise RuntimeError("openai package is not installed") from exc
+        raise RuntimeError("google-genai package is not installed") from exc
 
-    client = OpenAI(api_key=settings.openai_api_key)
-    response = client.responses.create(
-        model=settings.openai_model,
-        instructions=SYSTEM_INSTRUCTIONS,
-        input=_build_prompt(request),
-        text={
-            "format": {
-                "type": "json_schema",
-                "name": "shacl_wizard_parse_nl",
-                "schema": LLM_SCHEMA,
-                "strict": False,
-            }
+    client = genai.Client(api_key=settings.gemini_api_key)
+    response = client.models.generate_content(
+        model=settings.gemini_model,
+        contents=_build_prompt(request),
+        config={
+            "response_mime_type": "application/json",
+            "response_json_schema": LLM_SCHEMA,
         },
     )
 
@@ -120,7 +112,7 @@ def parse_with_openai(request: ParseNLRequest, settings: Settings) -> ParseNLRes
     return ParseNLResponse(
         properties=properties,
         summary=payload.get("summary", []),
-        source="openai",
+        source="gemini",
     )
 
 
@@ -132,13 +124,20 @@ def _build_prompt(request: ParseNLRequest) -> str:
         "shapeName": request.shape_name,
     }
     return (
+        f"{SYSTEM_INSTRUCTIONS}\n\n"
         "Parse this wizard request into SHACL property constraints. "
-        "Return JSON only.\n\n"
+        "Return JSON only and match this JSON schema:\n"
+        f"{json.dumps(LLM_SCHEMA, ensure_ascii=True, indent=2)}\n\n"
+        "Input:\n"
         f"{json.dumps(context, ensure_ascii=True, indent=2)}"
     )
 
 
 def _extract_response_text(response: Any) -> str:
+    text = getattr(response, "text", None)
+    if text:
+        return text
+
     output_text = getattr(response, "output_text", None)
     if output_text:
         return output_text

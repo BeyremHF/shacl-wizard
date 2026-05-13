@@ -4,4 +4,4 @@ rdflib>=7.1
 pyshacl>=0.30
 python-dotenv>=1.0
 python-multipart>=0.0.12
-openai>=1.99
+google-genai>=1.29

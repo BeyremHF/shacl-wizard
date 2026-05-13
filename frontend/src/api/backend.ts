@@ -3,7 +3,7 @@ import type { GenerateResponse, ParseResponse, PropertyShape, WizardState } from
 export interface ParseNLResponse {
   properties: PropertyShape[]
   summary: string[]
-  source: 'openai' | 'heuristic'
+  source: 'gemini' | 'heuristic'
   warnings: string[]
 }
 

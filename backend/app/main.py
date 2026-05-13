@@ -42,7 +42,8 @@ def health() -> dict[str, str | bool]:
     return {
         "status": "ok",
         "llmProvider": settings.llm_provider,
-        "openaiConfigured": bool(settings.openai_api_key),
+        "geminiConfigured": bool(settings.gemini_api_key),
+        "geminiModel": settings.gemini_model,
     }
 
 
