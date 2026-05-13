@@ -1,19 +1,6 @@
 import { useRef, useState } from 'react'
+import { parseRdfFile, parseRdfText } from '@/api/backend'
 import type { WizardState } from '@/types'
-
-function parseStub(filename: string) {
-  const n = filename.toLowerCase()
-  if (n.includes('person') || n.includes('social')) {
-    return { classes: ['Person', 'Organization'], properties: ['name', 'email', 'birthDate', 'knows', 'address'] }
-  }
-  if (n.includes('car') || n.includes('vehicle')) {
-    return { classes: ['Car', 'Owner'], properties: ['model', 'make', 'registrationDate', 'ownerName', 'color'] }
-  }
-  if (n.includes('product') || n.includes('shop')) {
-    return { classes: ['Product', 'Category'], properties: ['name', 'price', 'description', 'sku', 'category'] }
-  }
-  return { classes: ['Entity'], properties: ['name', 'label', 'description', 'type', 'date'] }
-}
 
 interface Props {
   update: (patch: Partial<WizardState>) => void
@@ -22,20 +9,45 @@ interface Props {
 
 export function UploadScreen({ update, onBack }: Props) {
   const [parsing, setParsing] = useState(false)
+  const [parseError, setParseError] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
 
-  const handleFile = (file: File) => {
+  const applyParsedGraph = (filename: string, classes: string[], properties: string[]) => {
+    update({
+      uploadedFileName:    filename,
+      suggestedClasses:    classes,
+      suggestedProperties: properties,
+      step:                0,
+    })
+  }
+
+  const handleFile = async (file: File) => {
     setParsing(true)
-    setTimeout(() => {
-      const { classes, properties } = parseStub(file.name)
-      update({
-        uploadedFileName:    file.name,
-        suggestedClasses:    classes,
-        suggestedProperties: properties,
-        step:                0,
-      })
+    setParseError('')
+
+    try {
+      const { classes, properties } = await parseRdfFile(file)
+      applyParsedGraph(file.name, classes, properties)
+    } catch (error) {
+      setParseError(error instanceof Error ? error.message : 'Could not parse the RDF file.')
+    } finally {
       setParsing(false)
-    }, 1200)
+    }
+  }
+
+  const handleText = async (graphText: string) => {
+    if (!graphText.trim()) return
+    setParsing(true)
+    setParseError('')
+
+    try {
+      const { classes, properties } = await parseRdfText(graphText)
+      applyParsedGraph('pasted-graph.ttl', classes, properties)
+    } catch (error) {
+      setParseError(error instanceof Error ? error.message : 'Could not parse the pasted Turtle.')
+    } finally {
+      setParsing(false)
+    }
   }
 
   return (
@@ -75,6 +87,12 @@ export function UploadScreen({ update, onBack }: Props) {
           onChange={e => { const f = e.target.files?.[0]; if (f) handleFile(f) }} />
       </div>
 
+      {parseError && (
+        <p className="text-xs text-red-500">
+          {parseError}
+        </p>
+      )}
+
       <div className="border-t border-zinc-100 pt-4">
         <p className="text-xs text-zinc-400 mb-2">Or paste raw Turtle text directly:</p>
         <textarea
@@ -82,7 +100,7 @@ export function UploadScreen({ update, onBack }: Props) {
           className="w-full min-h-[100px] px-3 py-2 text-xs mono rounded-md border border-zinc-200 resize-none focus:outline-none focus:border-zinc-400"
           onBlur={e => {
             if (e.target.value.trim()) {
-              handleFile(new File([e.target.value], 'pasted-graph.ttl', { type: 'text/plain' }))
+              handleText(e.target.value)
             }
           }}
         />

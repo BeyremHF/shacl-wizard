@@ -1,7 +1,9 @@
-import { useState, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { CodeBlock } from './CodeBlock'
+import { generateShapes, validateGraph } from '@/api/backend'
 import { buildTurtle, buildJsonLd, buildRdfXml, buildTrig } from '@/utils/outputBuilder'
 import type { WizardState } from '@/types'
+import type { ValidationResult } from '@/api/backend'
 
 interface Props {
   state:   WizardState
@@ -19,51 +21,19 @@ const TABS = [
 // ─── Validation result types ──────────────────────────────────────────────────
 
 type ValidationStatus = 'idle' | 'validating' | 'valid' | 'invalid' | 'error'
-
-interface Violation {
-  property:  string
-  message:   string
-  focusNode: string
-}
-
-interface ValidationResult {
-  status:     'valid' | 'invalid'
-  violations: Violation[]
-  dataFile:   string
-}
-
-// ─── Stub validator (replaced by POST /api/validate later) ───────────────────
-
-function validateStub(_shapesGraph: string, filename: string): Promise<ValidationResult> {
-  return new Promise(resolve => {
-    setTimeout(() => {
-      // Simulate finding violations for demo purposes
-      const hasViolations = filename.toLowerCase().includes('bad') || filename.toLowerCase().includes('invalid')
-      if (hasViolations) {
-        resolve({
-          status: 'invalid',
-          dataFile: filename,
-          violations: [
-            { focusNode: 'ex:Alice',   property: 'ex:email',    message: 'Value does not match pattern ^[\\w.]+@[\\w.]+\\.[a-z]{2,}$' },
-            { focusNode: 'ex:Bob',     property: 'ex:name',     message: 'Less than 1 values on ex:name' },
-            { focusNode: 'ex:Charlie', property: 'ex:birthDate',message: 'Value is not a valid xsd:date' },
-          ],
-        })
-      } else {
-        resolve({ status: 'valid', dataFile: filename, violations: [] })
-      }
-    }, 1800)
-  })
-}
+type GenerationStatus = 'generating' | 'ready' | 'fallback'
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export function Step5Output({ state, update }: Props) {
   const [validationStatus, setValidationStatus] = useState<ValidationStatus>('idle')
   const [validationResult, setValidationResult] = useState<ValidationResult | null>(null)
+  const [generationStatus, setGenerationStatus] = useState<GenerationStatus>('generating')
+  const [generatedFormats, setGeneratedFormats] = useState<Record<WizardState['outputTab'], string> | null>(null)
+  const [generationError, setGenerationError] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
 
-  const builds: Record<string, string> = {
+  const fallbackBuilds: Record<WizardState['outputTab'], string> = {
     turtle: buildTurtle(state),
     jsonld: buildJsonLd(state),
     rdfxml: buildRdfXml(state),
@@ -71,7 +41,32 @@ export function Step5Output({ state, update }: Props) {
   }
 
   const activeTab = TABS.find(t => t.id === state.outputTab) ?? TABS[0]
+  const builds = generatedFormats ?? fallbackBuilds
   const code = builds[activeTab.id]
+
+  useEffect(() => {
+    let alive = true
+
+    setGenerationStatus('generating')
+    setGenerationError('')
+
+    generateShapes(state)
+      .then(result => {
+        if (!alive) return
+        setGeneratedFormats(result.formats)
+        setGenerationStatus('ready')
+      })
+      .catch(error => {
+        if (!alive) return
+        setGeneratedFormats(null)
+        setGenerationStatus('fallback')
+        setGenerationError(error instanceof Error ? error.message : 'Backend generation failed.')
+      })
+
+    return () => {
+      alive = false
+    }
+  }, [state])
 
   const handleDownload = () => {
     const blob = new Blob([code], { type: 'text/plain' })
@@ -87,8 +82,7 @@ export function Step5Output({ state, update }: Props) {
     setValidationStatus('validating')
     setValidationResult(null)
     try {
-      // Later: replace with real fetch('/api/validate', { method: 'POST', body: formData })
-      const result = await validateStub(builds.turtle, file.name)
+      const result = await validateGraph(file, builds.turtle)
       setValidationResult(result)
       setValidationStatus(result.status)
     } catch {
@@ -137,6 +131,18 @@ export function Step5Output({ state, update }: Props) {
       </div>
 
       <CodeBlock code={code} lang={activeTab.label} />
+
+      {generationStatus === 'generating' && (
+        <p className="text-xs text-zinc-400">Generating output with the backend...</p>
+      )}
+      {generationStatus === 'ready' && (
+        <p className="text-xs text-emerald-600">Backend output is active.</p>
+      )}
+      {generationStatus === 'fallback' && (
+        <p className="text-xs text-amber-600">
+          Backend output unavailable. Showing local preview{generationError ? `: ${generationError}` : '.'}
+        </p>
+      )}
 
       {/* Download button */}
       <button

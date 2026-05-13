@@ -110,10 +110,9 @@ export const NODEKIND_OPTIONS = [
 ] as const
 
 // ─── Backend response types ───────────────────────────────────────────────────
-// These will be used when we wire up the /api/generate call later.
 
 export interface GenerateResponse {
-  formats:  Record<string, string>   // { turtle: '...', 'json-ld': '...' }
+  formats:  Record<WizardState['outputTab'], string>
   shapeUri: string
   summary:  string[]
 }

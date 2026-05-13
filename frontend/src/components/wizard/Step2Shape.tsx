@@ -3,27 +3,8 @@
 // mode and describe their data in plain English to get properties pre-filled.
 
 import { useState } from 'react'
-import type { WizardState, PropertyShape } from '@/types'
-
-// Simple UUID generator (no dependency needed)
-function uid() {
-  return Math.random().toString(36).slice(2, 8)
-}
-
-// Rule-based NL parser (stub — replaced by real LLM call once backend is up)
-function parseNLStub(text: string): PropertyShape[] {
-  const t = text.toLowerCase()
-  const props: PropertyShape[] = []
-
-  if (t.includes('name'))  props.push({ id: uid(), path: 'name',      constraints: { minCount: '1', maxCount: '1', datatype: 'xsd:string' } })
-  if (t.includes('email')) props.push({ id: uid(), path: 'email',     constraints: { minCount: '1', datatype: 'xsd:string', pattern: '^[\\w.]+@[\\w.]+\\.[a-z]{2,}$' } })
-  if (t.includes('age'))   props.push({ id: uid(), path: 'age',       constraints: { datatype: 'xsd:integer', minInclusive: '0', maxInclusive: '150' } })
-  if (t.includes('date') || t.includes('born')) props.push({ id: uid(), path: 'birthDate', constraints: { datatype: 'xsd:date' } })
-  if (t.includes('url') || t.includes('website') || t.includes('homepage')) props.push({ id: uid(), path: 'homepage', constraints: { datatype: 'xsd:anyURI', nodeKind: 'sh:IRI' } })
-
-  if (props.length === 0) props.push({ id: uid(), path: 'label', constraints: { minCount: '1', datatype: 'xsd:string' } })
-  return props
-}
+import { parseNaturalLanguage } from '@/api/backend'
+import type { WizardState } from '@/types'
 
 interface Props {
   state:  WizardState
@@ -32,16 +13,24 @@ interface Props {
 
 export function Step2Shape({ state, update }: Props) {
   const [parsing, setParsing] = useState(false)
+  const [parseError, setParseError] = useState('')
+  const [parseSource, setParseSource] = useState('')
 
-  const handleParse = () => {
+  const handleParse = async () => {
     if (!state.nlDescription.trim()) return
     setParsing(true)
-    // Simulate API latency; later this becomes a real fetch('/api/parse-nl', ...)
-    setTimeout(() => {
-      const parsed = parseNLStub(state.nlDescription)
-      update({ properties: parsed, nlParsed: true })
+    setParseError('')
+
+    try {
+      const result = await parseNaturalLanguage(state)
+      update({ properties: result.properties, nlParsed: true })
+      setParseSource(result.source)
+    } catch (error) {
+      setParseError(error instanceof Error ? error.message : 'Could not parse the description.')
+      update({ nlParsed: false })
+    } finally {
       setParsing(false)
-    }, 1400)
+    }
   }
 
   return (
@@ -150,8 +139,14 @@ export function Step2Shape({ state, update }: Props) {
             </button>
             {state.nlParsed && (
               <p className="text-xs text-emerald-600">
-                ✓ Found {state.properties.length} propert{state.properties.length === 1 ? 'y' : 'ies'}.
+                Found {state.properties.length} propert{state.properties.length === 1 ? 'y' : 'ies'}
+                {parseSource ? ` via ${parseSource}` : ''}.
                 Review them in the next step.
+              </p>
+            )}
+            {parseError && (
+              <p className="text-xs text-red-500">
+                {parseError}
               </p>
             )}
           </div>
