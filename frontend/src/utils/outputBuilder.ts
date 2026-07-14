@@ -1,4 +1,4 @@
-import type { WizardState, CompletedShape, PropertyShape, PropertyConstraints } from '@/types'
+import type { WizardState, CompletedShape, PropertyShape, PropertyConstraints, SubShape } from '@/types'
 
 // Well-known namespace URIs used to emit @prefix declarations for property
 // paths that carry a foreign CURIE (e.g. "schema:name", "foaf:Person").
@@ -40,12 +40,47 @@ function anchorPattern(pattern: string): string {
   return p
 }
 
+// Escape a free-text string for use inside a Turtle/quoted literal.
+function ttlEscape(value: string): string {
+  return value
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, '\\n')
+    .replace(/\r/g, '\\r')
+    .replace(/\t/g, '\\t')
+}
+
+// Split a comma-separated list value (sh:in / sh:languageIn) into clean, individual
+// terms. The AI parser sometimes yields a value with stray leading/trailing/double
+// commas (e.g. ",Audi,BMW,Mercedes") or values wrapped in stray quotes; without
+// sanitising, a naive split(',') leaves empty terms that render as a spurious ""
+// item in the RDF list. Trim whitespace, strip a single layer of wrapping quotes,
+// and drop empties so every value becomes its own well-formed term. Defensively
+// accepts an array too, in case an upstream value skipped string coercion.
+function splitListValues(value: string | string[]): string[] {
+  const raw = Array.isArray(value) ? value : String(value).split(',')
+  return raw
+    .map(v => String(v).trim().replace(/^["']|["']$/g, '').trim())
+    .filter(v => v.length > 0)
+}
+
+// Escape a free-text string for use inside an XML text node.
+function xmlEscape(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+}
+
 // Unified shape data used internally by all builders
 type ShapeSource = {
-  shapeName:   string
-  targetType:  string
-  targetValue: string
-  properties:  PropertyShape[]
+  shapeName:    string
+  targetType:   string
+  targetValue:  string
+  properties:   PropertyShape[]
+  shapeMessage?: string
+  closed?:      boolean
+  ignoredProperties?: string
 }
 
 type PrefixInfo = {
@@ -67,10 +102,13 @@ function nsBase(ns: string): string {
 
 function toShapeSource(s: CompletedShape | WizardState): ShapeSource {
   return {
-    shapeName:   s.shapeName,
-    targetType:  s.targetType ?? '',
-    targetValue: s.targetValue,
-    properties:  s.properties,
+    shapeName:    s.shapeName,
+    targetType:   s.targetType ?? '',
+    targetValue:  s.targetValue,
+    properties:   s.properties,
+    shapeMessage: s.shapeMessage,
+    closed:       s.closed,
+    ignoredProperties: s.ignoredProperties,
   }
 }
 
@@ -98,11 +136,18 @@ function extraPrefixLines(
   }
 
   for (const shape of shapes) {
+    if (shape.ignoredProperties) {
+      shape.ignoredProperties.split(',').forEach(p => scan(p.trim()))
+    }
     for (const prop of shape.properties) {
       scan(prop.path)
       const c = prop.constraints
       if (c.class) scan(c.class)
       if (c.node)  scan(c.node)
+      if (c.equals)           scan(c.equals)
+      if (c.disjoint)         scan(c.disjoint)
+      if (c.lessThan)         scan(c.lessThan)
+      if (c.lessThanOrEquals) scan(c.lessThanOrEquals)
     }
   }
 
@@ -151,6 +196,20 @@ function buildShapeBlock(shape: ShapeSource, prefix: string): string[] {
     lines.push(`    ${map[shape.targetType] ?? 'sh:targetClass'} ${p(shape.targetValue)} ;`)
   }
 
+  // sh:message on the NodeShape - annotation only, not a validating constraint.
+  if (shape.shapeMessage && shape.shapeMessage.trim()) {
+    lines.push(`    sh:message "${ttlEscape(shape.shapeMessage.trim())}" ;`)
+  }
+
+  // sh:closed (+ sh:ignoredProperties) - NodeShape-level.
+  if (shape.closed) {
+    lines.push('    sh:closed true ;')
+    const ignored = (shape.ignoredProperties ?? '').split(',').map(s => s.trim()).filter(Boolean)
+    if (ignored.length > 0) {
+      lines.push(`    sh:ignoredProperties ( ${ignored.map(p => p.includes(':') ? p : `${prefix}:${p}`).join(' ')} ) ;`)
+    }
+  }
+
   shape.properties.forEach((prop, idx) => {
     const isLast = idx === shape.properties.length - 1
     lines.push('    sh:property [')
@@ -165,6 +224,59 @@ function buildShapeBlock(shape: ShapeSource, prefix: string): string[] {
   }
 
   return lines
+}
+
+// Serialise a one-level nested sub-shape as an inline Turtle blank node:
+//   [ sh:datatype xsd:string ; sh:minInclusive 0 ]
+function subShapeInline(sub: SubShape, prefix: string): string {
+  const p = (local: string) => local.includes(':') ? local : `${prefix}:${local}`
+  const parts: string[] = []
+  if (sub.datatype)     parts.push(`sh:datatype ${sub.datatype}`)
+  if (sub.nodeKind)     parts.push(`sh:nodeKind ${shNodeKind(sub.nodeKind)}`)
+  if (sub.class)        parts.push(`sh:class ${p(sub.class)}`)
+  if (sub.node)         parts.push(`sh:node ${sub.node.includes(':') ? sub.node : p(sub.node)}`)
+  if (sub.pattern)      parts.push(`sh:pattern "${anchorPattern(sub.pattern)}"`)
+  if (sub.minInclusive) parts.push(`sh:minInclusive ${sub.minInclusive}`)
+  if (sub.maxInclusive) parts.push(`sh:maxInclusive ${sub.maxInclusive}`)
+  if (sub.minExclusive) parts.push(`sh:minExclusive ${sub.minExclusive}`)
+  if (sub.maxExclusive) parts.push(`sh:maxExclusive ${sub.maxExclusive}`)
+  if (sub.minLength)    parts.push(`sh:minLength ${sub.minLength}`)
+  if (sub.maxLength)    parts.push(`sh:maxLength ${sub.maxLength}`)
+  if (sub.in) {
+    const values = splitListValues(sub.in)
+    if (values.length) parts.push(`sh:in ( ${values.map(v => `"${ttlEscape(v)}"`).join(' ')} )`)
+  }
+  if (sub.hasValue)     parts.push(`sh:hasValue "${ttlEscape(sub.hasValue)}"`)
+  if (sub.languageIn) {
+    const tags = splitListValues(sub.languageIn)
+    if (tags.length) parts.push(`sh:languageIn ( ${tags.map(t => `"${ttlEscape(t)}"`).join(' ')} )`)
+  }
+  return parts.length ? `[ ${parts.join(' ; ')} ]` : '[ ]'
+}
+
+// Serialise a sub-shape as a JSON-LD node object.
+function subShapeJsonLd(sub: SubShape, prefix: string): Record<string, unknown> {
+  const p = (local: string) => local.includes(':') ? local : `${prefix}:${local}`
+  const obj: Record<string, unknown> = {}
+  const nums = ['minInclusive', 'maxInclusive', 'minExclusive', 'maxExclusive'] as const
+  for (const k of nums) if (sub[k]) obj[`sh:${k}`] = { '@value': sub[k], '@type': 'xsd:decimal' }
+  const ints = ['minLength', 'maxLength'] as const
+  for (const k of ints) if (sub[k]) obj[`sh:${k}`] = { '@value': sub[k], '@type': 'xsd:integer' }
+  if (sub.datatype)   obj['sh:datatype'] = { '@id': sub.datatype }
+  if (sub.nodeKind)   obj['sh:nodeKind'] = { '@id': shNodeKind(sub.nodeKind) }
+  if (sub.class)      obj['sh:class']    = { '@id': p(sub.class) }
+  if (sub.node)       obj['sh:node']     = { '@id': sub.node.includes(':') ? sub.node : p(sub.node) }
+  if (sub.pattern)    obj['sh:pattern']  = anchorPattern(sub.pattern)
+  if (sub.in) {
+    const values = splitListValues(sub.in)
+    if (values.length) obj['sh:in'] = { '@list': values }
+  }
+  if (sub.hasValue)   obj['sh:hasValue'] = sub.hasValue
+  if (sub.languageIn) {
+    const tags = splitListValues(sub.languageIn)
+    if (tags.length) obj['sh:languageIn'] = { '@list': tags }
+  }
+  return obj
 }
 
 function buildConstraintLines(c: PropertyConstraints, prefix: string): string[] {
@@ -188,13 +300,33 @@ function buildConstraintLines(c: PropertyConstraints, prefix: string): string[] 
     lines.push(`        sh:node ${nodeRef} ;`)
   }
   if (c.in) {
-    const values = c.in.split(',').map((v: string) => `"${v.trim()}"`).join(' ')
-    lines.push(`        sh:in ( ${values} ) ;`)
+    const values = splitListValues(c.in)
+    if (values.length) lines.push(`        sh:in ( ${values.map(v => `"${ttlEscape(v)}"`).join(' ')} ) ;`)
   }
   if (c.languageIn) {
-    const tags = c.languageIn.split(',').map((t: string) => `"${t.trim()}"`).join(' ')
-    lines.push(`        sh:languageIn ( ${tags} ) ;`)
+    const tags = splitListValues(c.languageIn)
+    if (tags.length) lines.push(`        sh:languageIn ( ${tags.map(t => `"${ttlEscape(t)}"`).join(' ')} ) ;`)
   }
+  if (c.hasValue)   lines.push(`        sh:hasValue "${ttlEscape(c.hasValue)}" ;`)
+  if (c.uniqueLang === 'true') lines.push('        sh:uniqueLang true ;')
+  if (c.equals)           lines.push(`        sh:equals ${p(c.equals)} ;`)
+  if (c.disjoint)         lines.push(`        sh:disjoint ${p(c.disjoint)} ;`)
+  if (c.lessThan)         lines.push(`        sh:lessThan ${p(c.lessThan)} ;`)
+  if (c.lessThanOrEquals) lines.push(`        sh:lessThanOrEquals ${p(c.lessThanOrEquals)} ;`)
+  // Logical / qualified constraints (Phase 5) - one level of nested sub-shapes.
+  const logicalList = (groups: SubShape[] | undefined): string =>
+    (groups ?? []).map(g => subShapeInline(g, prefix)).join(' ')
+  if (c.and && c.and.length)   lines.push(`        sh:and ( ${logicalList(c.and)} ) ;`)
+  if (c.or && c.or.length)     lines.push(`        sh:or ( ${logicalList(c.or)} ) ;`)
+  if (c.xone && c.xone.length) lines.push(`        sh:xone ( ${logicalList(c.xone)} ) ;`)
+  if (c.not)                   lines.push(`        sh:not ${subShapeInline(c.not, prefix)} ;`)
+  if (c.qualifiedValueShape) {
+    lines.push(`        sh:qualifiedValueShape ${subShapeInline(c.qualifiedValueShape, prefix)} ;`)
+    if (c.qualifiedMinCount) lines.push(`        sh:qualifiedMinCount ${c.qualifiedMinCount} ;`)
+    if (c.qualifiedMaxCount) lines.push(`        sh:qualifiedMaxCount ${c.qualifiedMaxCount} ;`)
+  }
+  // sh:message - annotation only, not a validating constraint.
+  if (c.message) lines.push(`        sh:message "${ttlEscape(c.message)}" ;`)
   return lines
 }
 
@@ -248,6 +380,18 @@ function buildJsonLdShapeObj(shape: ShapeSource, prefix: string): Record<string,
     obj[pred] = { '@id': p(shape.targetValue) }
   }
 
+  if (shape.shapeMessage && shape.shapeMessage.trim()) {
+    obj['sh:message'] = shape.shapeMessage.trim()
+  }
+
+  if (shape.closed) {
+    obj['sh:closed'] = { '@value': true, '@type': 'xsd:boolean' }
+    const ignored = (shape.ignoredProperties ?? '').split(',').map(s => s.trim()).filter(Boolean)
+    if (ignored.length > 0) {
+      obj['sh:ignoredProperties'] = { '@list': ignored.map(p => ({ '@id': p.includes(':') ? p : `${prefix}:${p}` })) }
+    }
+  }
+
   obj['sh:property'] = shape.properties.map(prop => buildJsonLdProperty(prop, prefix))
   return obj
 }
@@ -276,11 +420,29 @@ function buildJsonLdProperty(prop: PropertyShape, prefix: string): Record<string
   if (c.pattern)  obj['sh:pattern']  = anchorPattern(c.pattern)
 
   if (c.in) {
-    obj['sh:in'] = { '@list': c.in.split(',').map((v: string) => v.trim()) }
+    const values = splitListValues(c.in)
+    if (values.length) obj['sh:in'] = { '@list': values }
   }
   if (c.languageIn) {
-    obj['sh:languageIn'] = { '@list': c.languageIn.split(',').map((t: string) => t.trim()) }
+    const tags = splitListValues(c.languageIn)
+    if (tags.length) obj['sh:languageIn'] = { '@list': tags }
   }
+  if (c.hasValue) obj['sh:hasValue'] = c.hasValue
+  if (c.uniqueLang === 'true') obj['sh:uniqueLang'] = { '@value': true, '@type': 'xsd:boolean' }
+  if (c.equals)           obj['sh:equals']           = { '@id': p(c.equals) }
+  if (c.disjoint)         obj['sh:disjoint']         = { '@id': p(c.disjoint) }
+  if (c.lessThan)         obj['sh:lessThan']         = { '@id': p(c.lessThan) }
+  if (c.lessThanOrEquals) obj['sh:lessThanOrEquals'] = { '@id': p(c.lessThanOrEquals) }
+  if (c.and && c.and.length)   obj['sh:and']  = { '@list': c.and.map((g: SubShape) => subShapeJsonLd(g, prefix)) }
+  if (c.or && c.or.length)     obj['sh:or']   = { '@list': c.or.map((g: SubShape) => subShapeJsonLd(g, prefix)) }
+  if (c.xone && c.xone.length) obj['sh:xone'] = { '@list': c.xone.map((g: SubShape) => subShapeJsonLd(g, prefix)) }
+  if (c.not)                   obj['sh:not']  = subShapeJsonLd(c.not, prefix)
+  if (c.qualifiedValueShape) {
+    obj['sh:qualifiedValueShape'] = subShapeJsonLd(c.qualifiedValueShape, prefix)
+    if (c.qualifiedMinCount) obj['sh:qualifiedMinCount'] = { '@value': c.qualifiedMinCount, '@type': 'xsd:integer' }
+    if (c.qualifiedMaxCount) obj['sh:qualifiedMaxCount'] = { '@value': c.qualifiedMaxCount, '@type': 'xsd:integer' }
+  }
+  if (c.message) obj['sh:message'] = c.message
 
   return obj
 }
@@ -347,11 +509,26 @@ export function buildRdfXml(state: WizardState, completedShapes: CompletedShape[
       lines.push(`    <${pred} rdf:resource="${toUri(shape.targetValue)}"/>`)
     }
 
+    if (shape.shapeMessage && shape.shapeMessage.trim()) {
+      lines.push(`    <sh:message>${xmlEscape(shape.shapeMessage.trim())}</sh:message>`)
+    }
+
+    if (shape.closed) {
+      lines.push('    <sh:closed rdf:datatype="http://www.w3.org/2001/XMLSchema#boolean">true</sh:closed>')
+      const ignored = (shape.ignoredProperties ?? '').split(',').map(s => s.trim()).filter(Boolean)
+      if (ignored.length > 0) {
+        lines.push('    <sh:ignoredProperties rdf:parseType="Collection">')
+        for (const p of ignored) lines.push(`      <rdf:Description rdf:about="${toUri(p)}"/>`)
+        lines.push('    </sh:ignoredProperties>')
+      }
+    }
+
     for (const prop of shape.properties) {
       const c = prop.constraints
       lines.push('    <sh:property>')
       lines.push('      <sh:PropertyShape>')
       lines.push(`        <sh:path rdf:resource="${toUri(prop.path)}"/>`)
+      if (c.message) lines.push(`        <sh:message>${xmlEscape(c.message)}</sh:message>`)
       if (c.minCount)     lines.push(`        <sh:minCount rdf:datatype="xsd:integer">${c.minCount}</sh:minCount>`)
       if (c.maxCount)     lines.push(`        <sh:maxCount rdf:datatype="xsd:integer">${c.maxCount}</sh:maxCount>`)
       if (c.datatype)     lines.push(`        <sh:datatype rdf:resource="http://www.w3.org/2001/XMLSchema#${c.datatype.replace('xsd:', '')}"/>`)
@@ -361,6 +538,12 @@ export function buildRdfXml(state: WizardState, completedShapes: CompletedShape[
       if (c.maxInclusive) lines.push(`        <sh:maxInclusive>${c.maxInclusive}</sh:maxInclusive>`)
       if (c.minLength)    lines.push(`        <sh:minLength rdf:datatype="xsd:integer">${c.minLength}</sh:minLength>`)
       if (c.maxLength)    lines.push(`        <sh:maxLength rdf:datatype="xsd:integer">${c.maxLength}</sh:maxLength>`)
+      if (c.hasValue)     lines.push(`        <sh:hasValue>${xmlEscape(c.hasValue)}</sh:hasValue>`)
+      if (c.uniqueLang === 'true') lines.push('        <sh:uniqueLang rdf:datatype="http://www.w3.org/2001/XMLSchema#boolean">true</sh:uniqueLang>')
+      if (c.equals)           lines.push(`        <sh:equals rdf:resource="${toUri(c.equals)}"/>`)
+      if (c.disjoint)         lines.push(`        <sh:disjoint rdf:resource="${toUri(c.disjoint)}"/>`)
+      if (c.lessThan)         lines.push(`        <sh:lessThan rdf:resource="${toUri(c.lessThan)}"/>`)
+      if (c.lessThanOrEquals) lines.push(`        <sh:lessThanOrEquals rdf:resource="${toUri(c.lessThanOrEquals)}"/>`)
       lines.push('      </sh:PropertyShape>')
       lines.push('    </sh:property>')
     }

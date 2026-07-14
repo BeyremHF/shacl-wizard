@@ -26,6 +26,34 @@ class CamelModel(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="ignore")
 
 
+class SubShape(CamelModel):
+    """A one-level nested shape used inside a logical/qualified constraint.
+
+    Reuses the value-level constraint vocabulary only — no path, no cardinality,
+    and no further logical nesting — which keeps the model bounded and the UI
+    demo-ready (Phase 5, approved design).
+    """
+    datatype: str | None = None
+    node_kind: str | None = Field(default=None, alias="nodeKind")
+    class_: str | None = Field(default=None, alias="class")
+    node_: str | None = Field(default=None, alias="node")
+    pattern: str | None = None
+    min_inclusive: str | None = Field(default=None, alias="minInclusive")
+    max_inclusive: str | None = Field(default=None, alias="maxInclusive")
+    min_exclusive: str | None = Field(default=None, alias="minExclusive")
+    max_exclusive: str | None = Field(default=None, alias="maxExclusive")
+    min_length: str | None = Field(default=None, alias="minLength")
+    max_length: str | None = Field(default=None, alias="maxLength")
+    in_: str | None = Field(default=None, alias="in")
+    has_value: str | None = Field(default=None, alias="hasValue")
+    language_in: str | None = Field(default=None, alias="languageIn")
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def normalize_empty_values(cls, value: object) -> object:
+        return empty_string_to_none(value)
+
+
 class PropertyConstraints(CamelModel):
     min_count: str | None = Field(default=None, alias="minCount")
     max_count: str | None = Field(default=None, alias="maxCount")
@@ -42,6 +70,26 @@ class PropertyConstraints(CamelModel):
     class_: str | None = Field(default=None, alias="class")
     node_: str | None = Field(default=None, alias="node")
     language_in: str | None = Field(default=None, alias="languageIn")
+    has_value: str | None = Field(default=None, alias="hasValue")
+    unique_lang: str | None = Field(default=None, alias="uniqueLang")  # "true" when enabled
+    # Property-pair constraints — each references another property path in the
+    # same NodeShape.
+    equals: str | None = None
+    disjoint: str | None = None
+    less_than: str | None = Field(default=None, alias="lessThan")
+    less_than_or_equals: str | None = Field(default=None, alias="lessThanOrEquals")
+    # Logical / qualified constraints (Phase 5). Each sub-shape is one level deep.
+    and_: list[SubShape] | None = Field(default=None, alias="and")
+    or_: list[SubShape] | None = Field(default=None, alias="or")
+    xone: list[SubShape] | None = None
+    not_: SubShape | None = Field(default=None, alias="not")
+    qualified_value_shape: SubShape | None = Field(default=None, alias="qualifiedValueShape")
+    qualified_min_count: str | None = Field(default=None, alias="qualifiedMinCount")
+    qualified_max_count: str | None = Field(default=None, alias="qualifiedMaxCount")
+    # sh:message — a human-readable annotation, NOT one of the 28 SHACL Core
+    # constraint components. Customises the validation report text for this
+    # property shape; never counted toward the coverage goal.
+    message: str | None = None
 
     @field_validator("*", mode="before")
     @classmethod
@@ -67,6 +115,11 @@ class CompletedShape(CamelModel):
     target_type: TargetType | None = Field(default=None, alias="targetType")
     target_value: str = Field(default="", alias="targetValue")
     properties: list[PropertyShape] = Field(default_factory=list)
+    # Optional sh:message annotation for the whole NodeShape (see note above).
+    shape_message: str = Field(default="", alias="shapeMessage")
+    # sh:closed — when True, only the declared property paths are allowed.
+    closed: bool = Field(default=False)
+    ignored_properties: str = Field(default="", alias="ignoredProperties")
 
     @field_validator("target_type", mode="before")
     @classmethod
@@ -80,6 +133,9 @@ class WizardState(CamelModel):
     target_type: TargetType | None = Field(default=None, alias="targetType")
     target_value: str = Field(default="", alias="targetValue")
     shape_name: str = Field(default="", alias="shapeName")
+    shape_message: str = Field(default="", alias="shapeMessage")
+    closed: bool = Field(default=False)
+    ignored_properties: str = Field(default="", alias="ignoredProperties")
     properties: list[PropertyShape] = Field(default_factory=list)
     nl_description: str = Field(default="", alias="nlDescription")
     use_nl: bool = Field(default=False, alias="useNL")

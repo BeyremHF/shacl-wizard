@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import type { WizardState, PropertyShape } from '@/types'
 import { suggestProperties } from '@/api/backend'
 import { InfoTip } from './InfoTip'
@@ -23,7 +23,7 @@ export function Step3Properties({ state, update }: Props) {
 
   // Fetch AI property suggestions for the pill overlay. Extracted so the retry
   // button can re-run it. Failures are surfaced (see suggestError) instead of
-  // being swallowed — in manual mode this call is the only suggestion source,
+  // being swallowed - in manual mode this call is the only suggestion source,
   // so a silent failure looks like "the AI suggestions just don't work".
   const loadSuggestions = useCallback(() => {
     setLoadingPills(true)
@@ -44,12 +44,19 @@ export function Step3Properties({ state, update }: Props) {
       .finally(() => setLoadingPills(false))
   }, [state.shapeName, state.targetValue, state.targetType, state.detectedPrefixes, state.selectedPrefix])
 
+  // StrictMode double-invokes mount effects in dev, which would fire two
+  // suggestProperties calls; the second (last to resolve) would overwrite the
+  // first, making pills visibly change after they first render. A ref persists
+  // across StrictMode's simulated remount, so the fetch runs exactly once.
+  const didAutoLoad = useRef(false)
   useEffect(() => {
     if (state.nlParsed) return
+    if (didAutoLoad.current) return
+    didAutoLoad.current = true
     loadSuggestions()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Pills that haven't been added yet — reappear automatically when a property is removed
+  // Pills that haven't been added yet - reappear automatically when a property is removed
   const availablePills = pillSuggestions.filter(
     s => !state.properties.find(p => p.path.toLowerCase() === s.toLowerCase())
   )
@@ -134,7 +141,7 @@ export function Step3Properties({ state, update }: Props) {
                 focus:outline-none focus:border-zinc-400"
             />
 
-            {/* Pill overlay — only shown when input is empty */}
+            {/* Pill overlay - only shown when input is empty */}
             {showOverlay && (
               <div className="absolute inset-0 flex items-center px-2 pointer-events-none overflow-hidden rounded-md">
                 <div className="flex gap-1.5 overflow-x-auto no-scrollbar">
@@ -229,7 +236,7 @@ export function Step3Properties({ state, update }: Props) {
             Added properties
             <InfoTip align="left" className="lowercase">
               The number badge shows how many SHACL constraints are already
-              attached to that property — such as required count, datatype,
+              attached to that property - such as required count, datatype,
               or value range. You can configure them in the next step.
             </InfoTip>
           </p>

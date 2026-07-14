@@ -31,6 +31,25 @@ export const TARGET_OPTIONS = [
 
 // ─── Constraint types ─────────────────────────────────────────────────────────
 
+// A one-level nested shape used inside a logical / qualified constraint.
+// Value-level constraints only - no path, no cardinality, no further nesting.
+export interface SubShape {
+  datatype?:     string
+  nodeKind?:     string
+  class?:        string
+  node?:         string
+  pattern?:      string
+  minInclusive?: string
+  maxInclusive?: string
+  minExclusive?: string
+  maxExclusive?: string
+  minLength?:    string
+  maxLength?:    string
+  in?:           string
+  hasValue?:     string
+  languageIn?:   string
+}
+
 export interface PropertyConstraints {
   minCount?:     string
   maxCount?:     string
@@ -45,8 +64,26 @@ export interface PropertyConstraints {
   maxLength?:    string
   in?:           string   // comma-separated list of allowed values
   class?:        string   // sh:class constraint
-  node?:         string   // sh:node — references another NodeShape by local name or CURIE
+  node?:         string   // sh:node - references another NodeShape by local name or CURIE
   languageIn?:   string   // comma-separated language tags
+  hasValue?:     string   // sh:hasValue - a value the property must include
+  uniqueLang?:   string   // sh:uniqueLang - 'true' when enabled
+  // Property-pair constraints - each references another property path in the shape
+  equals?:           string
+  disjoint?:         string
+  lessThan?:         string
+  lessThanOrEquals?: string
+  // Logical / qualified constraints (one level of nesting)
+  and?:                 SubShape[]
+  or?:                  SubShape[]
+  xone?:                SubShape[]
+  not?:                 SubShape
+  qualifiedValueShape?: SubShape
+  qualifiedMinCount?:   string
+  qualifiedMaxCount?:   string
+  // sh:message - a human-readable annotation for the validation report, NOT one
+  // of the 28 SHACL Core constraint components. Never counted toward coverage.
+  message?:      string
 }
 
 export interface PropertyShape {
@@ -56,10 +93,13 @@ export interface PropertyShape {
 }
 
 export interface CompletedShape {
-  shapeName:   string
-  targetType:  TargetType
-  targetValue: string
-  properties:  PropertyShape[]
+  shapeName:    string
+  targetType:   TargetType
+  targetValue:  string
+  properties:   PropertyShape[]
+  shapeMessage?: string        // optional sh:message annotation for the whole shape
+  closed?:      boolean        // sh:closed - only declared properties allowed
+  ignoredProperties?: string   // comma-separated extra paths permitted when closed
 }
 
 // ─── Input mode ───────────────────────────────────────────────────────────────
@@ -74,6 +114,9 @@ export interface WizardState {
   targetType:           TargetType | ''
   targetValue:          string
   shapeName:            string
+  shapeMessage:         string        // optional sh:message annotation for the NodeShape
+  closed:               boolean       // sh:closed - only declared properties allowed
+  ignoredProperties:    string        // comma-separated extra paths permitted when closed
   properties:           PropertyShape[]
   nlDescription:        string
   useNL:                boolean
@@ -89,9 +132,13 @@ export interface WizardState {
   detectedPrefixes:     Record<string, string>   // from uploaded file, e.g. { ub: 'http://...' }
   selectedPrefix:       string                   // e.g. 'ub'
   selectedNamespace:    string                   // e.g. 'http://swat.cse.lehigh.edu/onto/univ-bench.owl#'
-  // sh:node refs from the previous shape that don't yet have a completed shape —
+  // sh:node refs from the previous shape that don't yet have a completed shape -
   // shown as quick-pick suggestions in Step 1 of the next shape
   pendingNodeRefs:      string[]
+  // Transient "jump to error" target: set by Step 5's per-violation button to
+  // send the user back to Step 4, select the property, open its constraint
+  // section, and highlight the failed field. Cleared by Step 4 once consumed.
+  jumpTarget:           { propertyId: string; field: string | null } | null
 }
 
 export const INITIAL_STATE: WizardState = {
@@ -100,6 +147,9 @@ export const INITIAL_STATE: WizardState = {
   targetType:           '',
   targetValue:          '',
   shapeName:            '',
+  shapeMessage:         '',
+  closed:               false,
+  ignoredProperties:    '',
   properties:           [],
   nlDescription:        '',
   useNL:                false,
@@ -115,6 +165,7 @@ export const INITIAL_STATE: WizardState = {
   selectedPrefix:       'ex',
   selectedNamespace:    'http://example.org/',
   pendingNodeRefs:      [],
+  jumpTarget:           null,
 }
 
 // ─── Datatype options (shown in Step 4 constraint panel) ─────────────────────

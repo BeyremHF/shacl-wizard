@@ -33,11 +33,13 @@ def build_shapes_graph(state: WizardState, base_uri: str, prefix: str = "ex") ->
 
     for cs in state.completed_shapes:
         _add_shape_to_graph(
-            graph, cs.shape_name, cs.target_type, cs.target_value, cs.properties, base_uri, prefix, detected
+            graph, cs.shape_name, cs.target_type, cs.target_value, cs.properties, base_uri, prefix, detected,
+            shape_message=cs.shape_message, closed=cs.closed, ignored_properties=cs.ignored_properties,
         )
 
     shape_uri = _add_shape_to_graph(
-        graph, state.shape_name, state.target_type, state.target_value, state.properties, base_uri, prefix, detected
+        graph, state.shape_name, state.target_type, state.target_value, state.properties, base_uri, prefix, detected,
+        shape_message=state.shape_message, closed=state.closed, ignored_properties=state.ignored_properties,
     )
     return graph, str(shape_uri)
 
@@ -51,6 +53,9 @@ def _add_shape_to_graph(
     base_uri: str,
     prefix: str = "ex",
     detected_prefixes: dict[str, str] | None = None,
+    shape_message: str = "",
+    closed: bool = False,
+    ignored_properties: str = "",
 ) -> URIRef:
     shape = _resource(shape_name, base_uri, prefix, detected_prefixes)
     graph.add((shape, RDF.type, SH.NodeShape))
@@ -63,6 +68,23 @@ def _add_shape_to_graph(
             "objectsOf": SH.targetObjectsOf,
         }.get(target_type, SH.targetClass)
         graph.add((shape, target_predicate, _resource(target_value, base_uri, prefix, detected_prefixes)))
+
+    # sh:message on the NodeShape — a human-readable annotation surfaced in the
+    # validation report, not a validating constraint (excluded from the 28-item
+    # coverage goal).
+    if shape_message and shape_message.strip():
+        graph.add((shape, SH.message, Literal(shape_message.strip())))
+
+    # sh:closed — NodeShape-level: only the declared property paths are allowed.
+    # sh:ignoredProperties lists extra predicates still permitted when closed.
+    if closed:
+        graph.add((shape, SH.closed, Literal(True)))
+        ignored = _split_csv(ignored_properties) if ignored_properties else []
+        if ignored:
+            _add_rdf_list(
+                graph, shape, SH.ignoredProperties,
+                [_resource(path, base_uri, prefix, detected_prefixes) for path in ignored],
+            )
 
     for prop in properties:
         if not prop.path.strip():
@@ -133,6 +155,85 @@ def _add_constraints(
         graph.add((subject, SH.node, _resource(c.node_, base_uri, prefix, detected_prefixes)))
     if c.in_:
         _add_rdf_list(graph, subject, SH["in"], [Literal(item) for item in _split_in_values(c.in_)])
+    if c.has_value:
+        # Matches the sh:in pattern: the value is emitted as a literal.
+        graph.add((subject, SH.hasValue, Literal(c.has_value.strip())))
+    if c.unique_lang and c.unique_lang.strip().lower() == "true":
+        graph.add((subject, SH.uniqueLang, Literal(True)))
+    # Property-pair constraints — the value is another property path (a predicate).
+    if c.equals:
+        graph.add((subject, SH.equals, _resource(c.equals, base_uri, prefix, detected_prefixes)))
+    if c.disjoint:
+        graph.add((subject, SH.disjoint, _resource(c.disjoint, base_uri, prefix, detected_prefixes)))
+    if c.less_than:
+        graph.add((subject, SH.lessThan, _resource(c.less_than, base_uri, prefix, detected_prefixes)))
+    if c.less_than_or_equals:
+        graph.add((subject, SH.lessThanOrEquals, _resource(c.less_than_or_equals, base_uri, prefix, detected_prefixes)))
+    if c.language_in:
+        _add_rdf_list(graph, subject, SH.languageIn, [Literal(tag) for tag in _split_csv(c.language_in)])
+    # sh:message is a shape-level annotation, NOT one of the 28 SHACL Core
+    # constraint components — it only customises the human-readable text in the
+    # validation report. Do not count it toward the coverage tally.
+    if c.message:
+        graph.add((subject, SH.message, Literal(c.message)))
+
+    # Logical / qualified constraints (Phase 5). Each sub-shape is a fresh blank
+    # node carrying value-level constraints (one level deep).
+    for predicate, groups in ((SH["and"], c.and_), (SH["or"], c.or_), (SH.xone, c.xone)):
+        if groups:
+            nodes: list[BNode] = []
+            for sub in groups:
+                b = BNode()
+                _emit_subshape_body(graph, b, sub, base_uri, prefix, detected_prefixes)
+                nodes.append(b)
+            _add_rdf_list(graph, subject, predicate, nodes)
+    if c.not_:
+        b = BNode()
+        _emit_subshape_body(graph, b, c.not_, base_uri, prefix, detected_prefixes)
+        graph.add((subject, SH["not"], b))
+    if c.qualified_value_shape:
+        b = BNode()
+        _emit_subshape_body(graph, b, c.qualified_value_shape, base_uri, prefix, detected_prefixes)
+        graph.add((subject, SH.qualifiedValueShape, b))
+        _add_int(graph, subject, SH.qualifiedMinCount, c.qualified_min_count, "qualifiedMinCount")
+        _add_int(graph, subject, SH.qualifiedMaxCount, c.qualified_max_count, "qualifiedMaxCount")
+
+
+def _emit_subshape_body(
+    graph: Graph,
+    node: BNode,
+    sub: object,
+    base_uri: str,
+    prefix: str = "ex",
+    detected_prefixes: dict[str, str] | None = None,
+) -> None:
+    """Emit the value-level constraints of a one-level nested SubShape.
+
+    Kept separate from _add_constraints so the main property path (the 23
+    already-shipped constraints) is never touched by Phase 5.
+    """
+    _add_int(graph, node, SH.minLength, sub.min_length, "minLength")
+    _add_int(graph, node, SH.maxLength, sub.max_length, "maxLength")
+    _add_numeric(graph, node, SH.minInclusive, sub.min_inclusive, "minInclusive", sub.datatype)
+    _add_numeric(graph, node, SH.maxInclusive, sub.max_inclusive, "maxInclusive", sub.datatype)
+    _add_numeric(graph, node, SH.minExclusive, sub.min_exclusive, "minExclusive", sub.datatype)
+    _add_numeric(graph, node, SH.maxExclusive, sub.max_exclusive, "maxExclusive", sub.datatype)
+    if sub.datatype:
+        graph.add((node, SH.datatype, _curie_or_uri(sub.datatype, base_uri, prefix, detected_prefixes=detected_prefixes)))
+    if sub.node_kind:
+        graph.add((node, SH.nodeKind, _resolve_node_kind(sub.node_kind)))
+    if sub.pattern:
+        graph.add((node, SH.pattern, Literal(_anchor_pattern(sub.pattern))))
+    if sub.class_:
+        graph.add((node, SH["class"], _resource(sub.class_, base_uri, prefix, detected_prefixes)))
+    if sub.node_:
+        graph.add((node, SH.node, _resource(sub.node_, base_uri, prefix, detected_prefixes)))
+    if sub.in_:
+        _add_rdf_list(graph, node, SH["in"], [Literal(item) for item in _split_in_values(sub.in_)])
+    if sub.has_value:
+        graph.add((node, SH.hasValue, Literal(sub.has_value.strip())))
+    if sub.language_in:
+        _add_rdf_list(graph, node, SH.languageIn, [Literal(tag) for tag in _split_csv(sub.language_in)])
 
 
 def _add_int(graph: Graph, subject: BNode, predicate: URIRef, value: str | None, label: str) -> None:

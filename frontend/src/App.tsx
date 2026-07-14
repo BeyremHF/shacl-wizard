@@ -1,10 +1,10 @@
 /**
- * App.tsx — root of the SHACL Wizard.
+ * App.tsx - root of the SHACL Wizard.
  *
  * Owns the top-level wizard state and decides which screen/step to render.
  * All state mutations flow downward via a single `update()` helper.
  *
- * Screen routing (simple — no React Router needed):
+ * Screen routing (simple - no React Router needed):
  *   state.mode === ''       → ModeSelect (landing)
  *   state.mode === 'upload' && !uploadedFileName → UploadScreen
  *   otherwise               → Wizard card (steps 0–4)
@@ -33,7 +33,7 @@ function canAdvance(state: WizardState): boolean {
     case 1: return !!state.shapeName.trim()
     case 2: return state.properties.length > 0
     case 3: return true   // constraints are optional; user can always proceed
-    case 4: return false  // last step — no "Next"
+    case 4: return false  // last step - no "Next"
     default: return false
   }
 }
@@ -42,6 +42,13 @@ export default function App() {
   const [state, setState] = useState<WizardState>(INITIAL_STATE)
   const [previousState, setPreviousState] = useState<WizardState | null>(null)
 
+  // Step 4's constraint editor is portaled into a side panel that sits OUTSIDE the
+  // wizard card (a page-level sibling). When open, the whole card column translates
+  // left and the panel slides into the freed space. `panelOpen` is reported up from
+  // Step 4 (desktop only); `slotNode` is the panel's scroll container (portal target).
+  const [panelOpen, setPanelOpen] = useState(false)
+  const [slotNode, setSlotNode] = useState<HTMLDivElement | null>(null)
+
   const update = (patch: Partial<WizardState>) =>
     setState((prev: WizardState) => ({ ...prev, ...patch }))
 
@@ -49,10 +56,13 @@ export default function App() {
 
   const handleAddAnotherShape = () => {
     const completed: CompletedShape = {
-      shapeName:   state.shapeName,
-      targetType:  state.targetType as CompletedShape['targetType'],
-      targetValue: state.targetValue,
-      properties:  state.properties,
+      shapeName:         state.shapeName,
+      targetType:        state.targetType as CompletedShape['targetType'],
+      targetValue:       state.targetValue,
+      properties:        state.properties,
+      shapeMessage:      state.shapeMessage,
+      closed:            state.closed,
+      ignoredProperties: state.ignoredProperties,
     }
     const allCompleted = [...state.completedShapes, completed]
     const completedNames = new Set(allCompleted.flatMap(s => [
@@ -120,6 +130,9 @@ export default function App() {
   // ── Main wizard ─────────────────────────────────────────────────────────────
   return (
     <Shell>
+      {/* The whole card column (header + card + footer) translates left when the
+          Step 4 side panel opens, freeing space on the right for it to slide into. */}
+      <div className={`transition-transform duration-200 ease-out ${panelOpen ? '-translate-x-[255px]' : ''}`}>
       {/* Header */}
       <div className="mb-7 flex items-end justify-between">
         <div>
@@ -150,7 +163,10 @@ export default function App() {
         </div>
       </div>
 
-      {/* Card */}
+      {/* Card + side panel. The panel is an absolutely-positioned sibling of the
+          card (anchored to its right edge), so opening/closing it never reflows the
+          card. It's the portal target for Step 4's constraint editor on >=1120px. */}
+      <div className="relative">
       <WizardCard>
         {/* Step indicator */}
         <StepIndicator step={state.step} total={TOTAL_STEPS} />
@@ -162,7 +178,14 @@ export default function App() {
           {state.step === 2 && (
             <Step3Properties state={state} update={update} />
           )}
-          {state.step === 3 && <Step4Constraints state={state} update={update} />}
+          {state.step === 3 && (
+            <Step4Constraints
+              state={state}
+              update={update}
+              onPanelChange={setPanelOpen}
+              panelSlot={slotNode}
+            />
+          )}
           {state.step === 4 && (
             <Step5Output
               state={state}
@@ -220,6 +243,17 @@ export default function App() {
           )}
         </div>
       </WizardCard>
+        <aside
+          aria-label="Constraint editor"
+          className={`absolute top-0 left-full ml-6 w-[486px] transition-[transform,opacity] duration-200 ease-out
+            ${panelOpen ? 'translate-x-0 opacity-100' : 'translate-x-8 opacity-0 pointer-events-none'}`}
+        >
+          <div
+            ref={setSlotNode}
+            className="bg-white rounded-2xl border border-zinc-200 shadow-sm p-5 max-h-[calc(100vh-6rem)] overflow-y-auto"
+          />
+        </aside>
+      </div>
 
       <div className="mt-4 px-1 h-4">
         {(state.shapeName || state.targetValue) && (
@@ -239,6 +273,7 @@ export default function App() {
           </p>
         )}
       </div>
+      </div>
     </Shell>
   )
 }
@@ -247,7 +282,7 @@ export default function App() {
 
 function Shell({ children }: { children: React.ReactNode }) {
   return (
-    <div className="min-h-screen bg-[#f7f7f5] flex items-start justify-center py-10 px-4">
+    <div className="min-h-screen bg-[#f7f7f5] flex items-start justify-center py-10 px-4 overflow-x-hidden">
       <div className="w-full max-w-[540px]">{children}</div>
     </div>
   )

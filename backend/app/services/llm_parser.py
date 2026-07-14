@@ -13,6 +13,27 @@ from app.models import (
 )
 
 
+# Value-level fields allowed inside a one-level nested sub-shape (Phase 5).
+_SUBSHAPE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "datatype": {"type": "string"},
+        "nodeKind": {"type": "string"},
+        "class": {"type": "string"},
+        "node": {"type": "string"},
+        "pattern": {"type": "string"},
+        "minInclusive": {"type": "string"},
+        "maxInclusive": {"type": "string"},
+        "minExclusive": {"type": "string"},
+        "maxExclusive": {"type": "string"},
+        "minLength": {"type": "string"},
+        "maxLength": {"type": "string"},
+        "in": {"type": "string"},
+        "hasValue": {"type": "string"},
+        "languageIn": {"type": "string"},
+    },
+}
+
 LLM_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -21,7 +42,15 @@ LLM_SCHEMA: dict[str, Any] = {
             "items": {
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string"},
+                    "path": {
+                        "type": "string",
+                        "description": (
+                            "The property's LOCAL NAME ONLY: no namespace prefix, no "
+                            "colon, and no full URI. Correct: \"name\", \"worksFor\", "
+                            "\"jobTitle\". Incorrect: \"ex:name\", \"schema:name\", "
+                            "\"foaf:name\", \"http://xmlns.com/foaf/0.1/name\"."
+                        ),
+                    },
                     "constraints": {
                         "type": "object",
                         "properties": {
@@ -40,6 +69,20 @@ LLM_SCHEMA: dict[str, Any] = {
                             "class": {"type": "string"},
                             "node": {"type": "string"},
                             "languageIn": {"type": "string"},
+                            "hasValue": {"type": "string"},
+                            "uniqueLang": {"type": "string"},
+                            "equals": {"type": "string"},
+                            "disjoint": {"type": "string"},
+                            "lessThan": {"type": "string"},
+                            "lessThanOrEquals": {"type": "string"},
+                            "and": {"type": "array", "items": _SUBSHAPE_SCHEMA},
+                            "or": {"type": "array", "items": _SUBSHAPE_SCHEMA},
+                            "xone": {"type": "array", "items": _SUBSHAPE_SCHEMA},
+                            "not": _SUBSHAPE_SCHEMA,
+                            "qualifiedValueShape": _SUBSHAPE_SCHEMA,
+                            "qualifiedMinCount": {"type": "string"},
+                            "qualifiedMaxCount": {"type": "string"},
+                            "message": {"type": "string"},
                         },
                     },
                 },
@@ -60,7 +103,64 @@ Return JSON matching the schema exactly. Constraint values must be strings
 because the frontend stores wizard input as strings. Only use these constraint
 fields: minCount, maxCount, datatype, nodeKind, pattern, minInclusive,
 maxInclusive, minExclusive, maxExclusive, minLength, maxLength, in, class, node,
-languageIn.
+languageIn, hasValue, uniqueLang, equals, disjoint, lessThan,
+lessThanOrEquals, message.
+
+"hasValue" is a single required value the property must include (e.g. "must
+have the value 'active'"). "uniqueLang" is the string "true" only when the user
+says each language may appear at most once among the values (e.g. "at most one
+label per language"); otherwise omit it.
+
+The property-pair fields (equals, disjoint, lessThan, lessThanOrEquals) each
+take ANOTHER property's path from the same shape as their value. Only use them
+when the user compares one property to another property.
+
+DIRECTION IS CRITICAL for lessThan and lessThanOrEquals — getting it backwards
+reverses the meaning. Put the constraint on the SMALLER / EARLIER property and
+point it at the LARGER / LATER property:
+- "A must be before / less than / earlier than B" -> set lessThan on property A
+  with value "B". Put it on A only; B gets nothing.
+- "A must be on or before / at most / no later than B" -> set lessThanOrEquals
+  on property A with value "B".
+Worked example: "startDate must be strictly before endDate" ->
+  startDate.constraints.lessThan = "endDate"   (endDate has NO pair constraint).
+NEVER attach the constraint to the later/larger property, and never point it
+back the other way (e.g. do NOT put lessThan="startDate" on endDate).
+
+The logical fields (and, or, xone, not, qualifiedValueShape) hold nested
+value-constraint objects (one level deep only — never nest a logical field
+inside another). Use "or" for "either X or Y" (e.g. value is a string or an
+integer -> or: [{"datatype":"xsd:string"},{"datatype":"xsd:integer"}]), "not"
+for a single negated condition, "xone" for exactly-one-of, "and" for all-of.
+
+qualifiedValueShape (+ qualifiedMinCount / qualifiedMaxCount) is for "at least /
+at most N of the values that are / conform to <condition>", where only SOME of
+the values must match (the rest are unrestricted). In that case put the
+condition INSIDE qualifiedValueShape and the number in qualifiedMinCount /
+qualifiedMaxCount. Do NOT instead put a plain class/datatype together with a
+plain minCount/maxCount on the property — that wrongly forces EVERY value to
+match the condition. Worked example: "at least two teamMembers that are
+instances of ex:Manager" ->
+  teamMembers.constraints = {"qualifiedValueShape": {"class": "ex:Manager"},
+                             "qualifiedMinCount": "2"}
+with NO plain "class" and NO plain "minCount" on teamMembers. Use plain
+minCount/maxCount only for the TOTAL number of values, and use a plain
+class/datatype only when EVERY value must satisfy it.
+
+Inside any nested condition (a sub-shape of and/or/xone/not/qualifiedValueShape),
+"is an instance of / is a / are <ClassName>" means class: "<ClassName>". Use
+node inside a sub-shape ONLY when the user says the value must conform to another
+named SHAPE, never for a plain class membership. Example: "values that are
+instances of ex:Manager" -> {"class": "ex:Manager"}, not {"node": "ex:Manager"}.
+
+Only use these compound fields when the user clearly expresses such a condition;
+otherwise prefer the flat fields. Do NOT guess.
+
+"message" is NOT a validating constraint — it is an optional custom
+sh:message string shown in the validation report when this property is
+violated. Only set it if the user explicitly asks for a custom error/validation
+message for a property (e.g. "show the message 'Email looks invalid'"). Never
+invent one.
 
 Use SHACL/XSD CURIEs such as xsd:string, xsd:integer, xsd:decimal, xsd:date,
 xsd:boolean, xsd:anyURI, sh:IRI, sh:Literal, and sh:BlankNode only when the
@@ -68,19 +168,17 @@ user explicitly specifies a value type. Do NOT infer or add datatype unless the
 user names one (e.g. "must be an integer", "must be a date"). Never set
 sh:datatype on a property that has sh:nodeKind sh:IRI or sh:node.
 
-Property path naming — the input includes "availablePrefixes" (a map of
-prefix -> namespace) and "selectedPrefix":
-- If the user writes a property explicitly as a CURIE (prefix:localName, e.g.
-  "ub:name", "ub:worksFor"), preserve that exact CURIE verbatim in "path",
-  including the prefix — even if that prefix is not in availablePrefixes. The
-  user chose it deliberately; do not strip or rename it.
-- Otherwise, if a property clearly belongs to one of the availablePrefixes
-  vocabularies (e.g. a person's name under foaf, a job title under schema), use
-  that CURIE form for "path", such as foaf:name or schema:jobTitle.
-- Otherwise use a bare local name with no prefix (e.g. "salary"); the wizard
-  automatically applies the selectedPrefix to bare names.
-- Never use the ex: prefix and never invent a prefix the user did not write and
-  that is not in availablePrefixes.
+Property path naming — always return "path" as a bare LOCAL NAME only: no
+namespace prefix, no colon, and no full URI. The wizard applies the correct
+prefix afterwards, so you must never add one. Return exactly one token per path
+with no ":" character anywhere in it.
+- CORRECT:   "name", "email", "worksFor", "jobTitle", "salary"
+- INCORRECT: "ex:name" (prefix), "schema:name" (prefix), "foaf:name" (prefix),
+  "http://xmlns.com/foaf/0.1/name" (full URI), ":name" (colon)
+This holds in every case. Even when the user writes a property as a CURIE (e.g.
+"ub:worksFor") or when the property clearly belongs to a known vocabulary such
+as foaf or schema, strip the prefix and return only the local part
+("worksFor", "name"). Never emit a prefix, a colon, or a URI in "path".
 
 Shape references (node) — the input includes "existingShapes", a list of
 NodeShape names already defined in this graph:
@@ -233,14 +331,49 @@ def parse_with_gemini(request: ParseNLRequest, settings: Settings) -> ParseNLRes
     )
 
 
+# Fields the frontend stores as comma-separated strings but the LLM sometimes
+# emits as a JSON array. Coerce arrays back to a string so downstream (and the
+# str-typed pydantic fields) never receive a list.
+_STRING_LIST_FIELDS = ("in", "languageIn")
+
+
+def _list_to_csv(items: list) -> str:
+    return ", ".join(str(x).strip().strip("\"'") for x in items if str(x).strip())
+
+
+def _coerce_string_list_fields(obj: dict) -> None:
+    for field in _STRING_LIST_FIELDS:
+        if isinstance(obj.get(field), list):
+            obj[field] = _list_to_csv(obj[field])
+
+
+def _normalize_subshape(sub: dict) -> dict:
+    """Coerce list-valued fields inside a one-level nested sub-shape."""
+    out = dict(sub)
+    _coerce_string_list_fields(out)
+    if out.get("in"):
+        out["in"] = _normalize_in_value(out["in"])
+    return out
+
+
 def _normalize_constraints(
     raw: dict,
     allowed_shapes: set[str] | None = None,
     description: str = "",
 ) -> dict:
     result = dict(raw)
+    _coerce_string_list_fields(result)
     if result.get("in"):
         result["in"] = _normalize_in_value(result["in"])
+    # Logical sub-shapes: coerce list fields within each nested group too.
+    for list_field in ("and", "or", "xone"):
+        if isinstance(result.get(list_field), list):
+            result[list_field] = [
+                _normalize_subshape(s) for s in result[list_field] if isinstance(s, dict)
+            ]
+    for obj_field in ("not", "qualifiedValueShape"):
+        if isinstance(result.get(obj_field), dict):
+            result[obj_field] = _normalize_subshape(result[obj_field])
     if result.get("minInclusive"):
         result["minExclusive"] = None
     if result.get("maxInclusive"):
@@ -273,13 +406,45 @@ def _node_is_allowed(
     return node.lower() in folded or (bool(local) and local.lower() in folded)
 
 
-def _normalize_in_value(value: str) -> str:
-    if "," in value:
-        tokens = [t.strip().strip("\"'") for t in value.split(",")]
+def _normalize_in_value(value: str | list) -> str:
+    """Normalise an enumerated sh:in value into a clean comma-separated string.
+
+    The LLM is inconsistent about how it formats the list: sometimes a plain
+    'BMW, Audi, Mercedes', but sometimes wrapped in RDF-list / SHACL / JSON
+    syntax such as '( "BMW" "Audi" "Mercedes" )', '("BMW","Audi")',
+    '["BMW","Audi"]', or even prefixed with 'sh:in'. Naively splitting such a
+    value leaks the wrapper characters (parens/brackets) into the first and last
+    terms (e.g. '(,BMW,Audi,)'). Strip the wrapper, prefer quoted spans, and
+    sanitise each term so every value comes out as its own clean token.
+    """
+    if isinstance(value, list):
+        items: list[str] = [str(x) for x in value]
     else:
-        tokens = re.findall(r'"[^"]*"|\'[^\']*\'|\S+', value)
-        tokens = [t.strip("\"'") for t in tokens]
-    return ",".join(t for t in tokens if t)
+        text = str(value).strip()
+        # Drop a leading 'sh:in' and one surrounding ()/[] wrapper so those
+        # characters can't leak into the values.
+        text = re.sub(r"^\s*sh:in\b\s*", "", text, flags=re.IGNORECASE).strip()
+        if len(text) >= 2 and text[0] in "([" and text[-1] in ")]":
+            text = text[1:-1].strip()
+        # Prefer explicitly quoted spans (handles both comma- and space-separated
+        # quoted lists, and preserves commas inside a quoted value); otherwise
+        # fall back to comma, then whitespace, splitting.
+        quoted = re.findall(r'"([^"]*)"|\'([^\']*)\'', text)
+        if quoted:
+            items = [a or b for a, b in quoted]
+        elif "," in text:
+            items = text.split(",")
+        else:
+            items = text.split()
+
+    cleaned: list[str] = []
+    for item in items:
+        token = str(item).strip().strip("\"'()[]").strip()
+        # Drop a leading conjunction the LLM sometimes keeps from "A, B, or C".
+        token = re.sub(r"^(?:or|and)\s+", "", token, flags=re.IGNORECASE).strip()
+        if token:
+            cleaned.append(token)
+    return ",".join(cleaned)
 
 
 def _build_user_message(request: ParseNLRequest) -> str:
