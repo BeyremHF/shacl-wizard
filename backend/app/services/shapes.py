@@ -148,7 +148,7 @@ def _add_constraints(
     if c.node_kind:
         graph.add((subject, SH.nodeKind, _resolve_node_kind(c.node_kind)))
     if c.pattern:
-        graph.add((subject, SH.pattern, Literal(_anchor_pattern(c.pattern))))
+        graph.add((subject, SH.pattern, Literal(c.pattern)))
     if c.class_:
         graph.add((subject, SH["class"], _resource(c.class_, base_uri, prefix, detected_prefixes)))
     if c.node_:
@@ -223,7 +223,7 @@ def _emit_subshape_body(
     if sub.node_kind:
         graph.add((node, SH.nodeKind, _resolve_node_kind(sub.node_kind)))
     if sub.pattern:
-        graph.add((node, SH.pattern, Literal(_anchor_pattern(sub.pattern))))
+        graph.add((node, SH.pattern, Literal(sub.pattern)))
     if sub.class_:
         graph.add((node, SH["class"], _resource(sub.class_, base_uri, prefix, detected_prefixes)))
     if sub.node_:
@@ -362,15 +362,6 @@ def _safe_local_name(value: str) -> str:
     cleaned = re.sub(r"\s+", "", value.strip())
     cleaned = re.sub(r"[^A-Za-z0-9_.-]", "_", cleaned)
     return cleaned or "Unnamed"
-
-
-def _anchor_pattern(pattern: str) -> str:
-    p = pattern
-    if not p.startswith("^"):
-        p = "^" + p
-    if not p.endswith("$") or (len(p) >= 2 and p[-2] == "\\"):
-        p = p + "$"
-    return p
 
 
 def _base(base_uri: str) -> str:

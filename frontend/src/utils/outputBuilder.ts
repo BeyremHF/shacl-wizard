@@ -33,13 +33,6 @@ function shNodeKind(value: string): string {
   return SH_NODE_KIND_NAMES.has(bare) ? `sh:${bare}` : value
 }
 
-function anchorPattern(pattern: string): string {
-  let p = pattern
-  if (!p.startsWith('^')) p = '^' + p
-  if (!p.endsWith('$') || (p.length >= 2 && p[p.length - 2] === '\\')) p = p + '$'
-  return p
-}
-
 // Escape a free-text string for use inside a Turtle/quoted literal.
 function ttlEscape(value: string): string {
   return value
@@ -235,7 +228,7 @@ function subShapeInline(sub: SubShape, prefix: string): string {
   if (sub.nodeKind)     parts.push(`sh:nodeKind ${shNodeKind(sub.nodeKind)}`)
   if (sub.class)        parts.push(`sh:class ${p(sub.class)}`)
   if (sub.node)         parts.push(`sh:node ${sub.node.includes(':') ? sub.node : p(sub.node)}`)
-  if (sub.pattern)      parts.push(`sh:pattern "${anchorPattern(sub.pattern)}"`)
+  if (sub.pattern)      parts.push(`sh:pattern "${sub.pattern}"`)
   if (sub.minInclusive) parts.push(`sh:minInclusive ${sub.minInclusive}`)
   if (sub.maxInclusive) parts.push(`sh:maxInclusive ${sub.maxInclusive}`)
   if (sub.minExclusive) parts.push(`sh:minExclusive ${sub.minExclusive}`)
@@ -266,7 +259,7 @@ function subShapeJsonLd(sub: SubShape, prefix: string): Record<string, unknown> 
   if (sub.nodeKind)   obj['sh:nodeKind'] = { '@id': shNodeKind(sub.nodeKind) }
   if (sub.class)      obj['sh:class']    = { '@id': p(sub.class) }
   if (sub.node)       obj['sh:node']     = { '@id': sub.node.includes(':') ? sub.node : p(sub.node) }
-  if (sub.pattern)    obj['sh:pattern']  = anchorPattern(sub.pattern)
+  if (sub.pattern)    obj['sh:pattern']  = sub.pattern
   if (sub.in) {
     const values = splitListValues(sub.in)
     if (values.length) obj['sh:in'] = { '@list': values }
@@ -286,7 +279,7 @@ function buildConstraintLines(c: PropertyConstraints, prefix: string): string[] 
   if (c.maxCount)     lines.push(`        sh:maxCount ${c.maxCount} ;`)
   if (c.datatype)     lines.push(`        sh:datatype ${c.datatype} ;`)
   if (c.nodeKind)     lines.push(`        sh:nodeKind ${shNodeKind(c.nodeKind)} ;`)
-  if (c.pattern)      lines.push(`        sh:pattern "${anchorPattern(c.pattern)}" ;`)
+  if (c.pattern)      lines.push(`        sh:pattern "${c.pattern}" ;`)
   if (c.minInclusive) lines.push(`        sh:minInclusive ${c.minInclusive} ;`)
   if (c.maxInclusive) lines.push(`        sh:maxInclusive ${c.maxInclusive} ;`)
   if (c.minExclusive) lines.push(`        sh:minExclusive ${c.minExclusive} ;`)
@@ -417,7 +410,7 @@ function buildJsonLdProperty(prop: PropertyShape, prefix: string): Record<string
   if (c.datatype) obj['sh:datatype'] = { '@id': c.datatype }
   if (c.nodeKind) obj['sh:nodeKind'] = { '@id': shNodeKind(c.nodeKind) }
   if (c.class)    obj['sh:class']    = { '@id': p(c.class) }
-  if (c.pattern)  obj['sh:pattern']  = anchorPattern(c.pattern)
+  if (c.pattern)  obj['sh:pattern']  = c.pattern
 
   if (c.in) {
     const values = splitListValues(c.in)
@@ -533,7 +526,7 @@ export function buildRdfXml(state: WizardState, completedShapes: CompletedShape[
       if (c.maxCount)     lines.push(`        <sh:maxCount rdf:datatype="xsd:integer">${c.maxCount}</sh:maxCount>`)
       if (c.datatype)     lines.push(`        <sh:datatype rdf:resource="http://www.w3.org/2001/XMLSchema#${c.datatype.replace('xsd:', '')}"/>`)
       if (c.nodeKind)     lines.push(`        <sh:nodeKind rdf:resource="http://www.w3.org/ns/shacl#${c.nodeKind.replace('sh:', '')}"/>`)
-      if (c.pattern)      lines.push(`        <sh:pattern>${anchorPattern(c.pattern)}</sh:pattern>`)
+      if (c.pattern)      lines.push(`        <sh:pattern>${c.pattern}</sh:pattern>`)
       if (c.minInclusive) lines.push(`        <sh:minInclusive>${c.minInclusive}</sh:minInclusive>`)
       if (c.maxInclusive) lines.push(`        <sh:maxInclusive>${c.maxInclusive}</sh:maxInclusive>`)
       if (c.minLength)    lines.push(`        <sh:minLength rdf:datatype="xsd:integer">${c.minLength}</sh:minLength>`)

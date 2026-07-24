@@ -221,11 +221,8 @@ export function detectConstraintIssues(c: PropertyConstraints, ownPath?: string)
     }
     // pattern mismatch
     if (c.pattern) {
-      let anchored = c.pattern
-      if (!anchored.startsWith('^')) anchored = '^' + anchored
-      if (!anchored.endsWith('$') || (anchored.length >= 2 && anchored[anchored.length - 2] === '\\')) anchored += '$'
       try {
-        if (!new RegExp(anchored).test(hv)) {
+        if (!new RegExp(c.pattern).test(hv)) {
           issues.push({
             id: 'C10', level: 'contradiction', fields: ['hasValue', 'pattern'],
             message: `hasValue "${hv}" does not match the required pattern`,

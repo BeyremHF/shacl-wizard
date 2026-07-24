@@ -295,9 +295,17 @@ export function Step4Constraints({ state, update, onPanelChange, panelSlot }: Pr
         <MaybePortal target={panelSlot ?? null} inline={!isDesktop}>
         <div
           ref={editorRef}
-          className={isDesktop ? 'space-y-4' : 'space-y-4 fade-up'}
+          className={`flex flex-col min-h-0 gap-4 ${isDesktop ? '' : 'fade-up'}`}
           onKeyDown={onPanelKeyDown}
         >
+        {/* Scrollable region - everything except the Save button below, which
+            stays pinned to the panel's bottom instead of scrolling away with
+            the constraint list. min-h-0 above lets this div actually shrink
+            (rather than being pushed taller than the App-level panel's own
+            max-h-full cap) once content is long enough to need it - same
+            mechanism as Step 1/3's fixed-header side panels, just used for a
+            fixed footer here instead. */}
+        <div className="flex-1 min-h-0 overflow-y-auto space-y-4">
 
           {/* Editable property name */}
           <div className="flex items-center gap-2">
@@ -945,9 +953,11 @@ export function Step4Constraints({ state, update, onPanelChange, panelSlot }: Pr
             </div>
           )}
 
+        </div>
+
           <button
             onClick={saveAndClose}
-            className="w-full h-10 rounded-md bg-zinc-900 hover:bg-zinc-700 text-white text-sm transition-colors"
+            className="shrink-0 w-full h-10 rounded-md bg-zinc-900 hover:bg-zinc-700 text-white text-sm transition-colors"
           >
             Save rules for{' '}
             <span className="mono ml-1 opacity-70">{activeProperty.path.includes(':') ? activeProperty.path : `${pfx}:${activeProperty.path}`}</span>
